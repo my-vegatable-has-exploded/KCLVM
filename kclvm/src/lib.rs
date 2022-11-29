@@ -4,7 +4,7 @@ pub use kclvm_parser::load_program;
 pub use kclvm_query::apply_overrides;
 pub use kclvm_runner::execute;
 pub use kclvm_runner::runner::*;
-pub use kclvm_tools::langserver::match_word;
+pub use kclvm_tools::langserver::*;
 
 #[no_mangle]
 pub extern "C" fn kclvm_cli_run(args: *const i8, plugin_agent: *const i8) -> *const i8 {
