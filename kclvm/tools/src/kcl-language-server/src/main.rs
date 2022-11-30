@@ -1,9 +1,10 @@
+#[allow(dead_code)]
 use std::collections::{HashMap, HashSet};
 use std::default;
 
 use dashmap::DashMap;
 use kclvm_sema::resolver::scope::ScopeObject;
-use kclvm_tools::langserver::word_at_pos;
+use kclvm_tools::langserver::{kcl_pos_to_lsp_pos, lsp_pos_to_kcl_pos, word_at_pos};
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
 // use serde_json::Value;
@@ -194,24 +195,23 @@ impl LanguageServer for Backend {
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let uri = params.text_document_position.text_document.uri;
-        let mut pos_arg = vec![];
-        pos_arg.push(Location::new(
-            uri.clone(),
-            Range::new(
-                Position::new(0 as u32, 0 as u32),
-                Position::new(0 as u32, 1 as u32),
-            ),
-        ));
+        let file_name = uri.path().to_string();
 
-        pos_arg.push(Location::new(
-            uri,
-            Range::new(
-                Position::new(1 as u32, 0 as u32),
-                Position::new(1 as u32, 1 as u32),
-            ),
-        ));
+        let position = params.text_document_position.position;
 
-        let reference_list = Some(pos_arg);
+        let pos = KCLPOS {
+            filename: file_name.to_string(),
+            line: (position.line) as u64,
+            column: Some(position.character as u64),
+        };
+
+        let pos = lsp_pos_to_kcl_pos(pos);
+        let reference_list = find_refs(file_name.clone(), pos);
+        let reference_list = if reference_list.is_empty() {
+            Some(reference_list)
+        } else {
+            None
+        };
         // let reference_list = || -> Option<Vec<Location>> {
         //     let uri = params.text_document_position.text_document.uri;
         //     let ast = self.ast_map.get(&uri.to_string())?;
@@ -241,19 +241,25 @@ impl LanguageServer for Backend {
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        let uri = params.clone().text_document_position_params.text_document.uri;
+        let uri = params
+            .clone()
+            .text_document_position_params
+            .text_document
+            .uri;
         let position = params.clone().text_document_position_params.position;
-
 
         let file_name = uri.path();
 
         self.client
-        .log_message(MessageType::INFO, format!("filename: {}", file_name))
-        .await;
+            .log_message(MessageType::INFO, format!("filename: {}", file_name))
+            .await;
 
         self.client
-        .log_message(MessageType::INFO, format!("pos: {} {}", position.line, position.character))
-        .await;
+            .log_message(
+                MessageType::INFO,
+                format!("pos: {} {}", position.line, position.character),
+            )
+            .await;
 
         let definition = || -> Option<GotoDefinitionResponse> {
             let uri = params.text_document_position_params.text_document.uri;
@@ -291,10 +297,8 @@ impl LanguageServer for Backend {
                         obj.start.line as u32 - 1,
                         obj.start.column.unwrap_or(0) as u32,
                     );
-                    let end_position = Position::new(
-                        obj.end.line as u32 - 1,
-                        obj.end.column.unwrap_or(0) as u32,
-                    );
+                    let end_position =
+                        Position::new(obj.end.line as u32 - 1, obj.end.column.unwrap_or(0) as u32);
                     let range = Range::new(start_position, end_position);
                     Some(GotoDefinitionResponse::Scalar(Location::new(uri, range)))
                 }

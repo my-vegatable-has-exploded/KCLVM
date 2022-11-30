@@ -1,35 +1,50 @@
 use crate::langserver;
 use crate::langserver::LineWord;
-use kclvm_error::Position;
+use kclvm_error::Position as KCLPOS;
 
 #[cfg(test)]
 mod tests {
-    use crate::langserver::go_to_def::go_to_def_test;
+    use crate::langserver::{
+        find_refs::find_refs,
+        go_to_def::{go_to_def, go_to_def_test},
+    };
+    use std::env;
+    use tower_lsp::lsp_types::{Location, Position, Range, Url};
 
     use super::*;
     use std::fs;
-    use std::{collections::HashMap, hash::Hash};
 
     fn check_line_to_words(code: &str, expect: Vec<LineWord>) {
         assert_eq!(langserver::line_to_words(code.to_string()), expect);
     }
 
-    fn test_eq_list<T>(a: &[T], b: &[T]) -> bool
-    where
-        T: Eq + Hash,
-    {
-        fn count<T>(items: &[T]) -> HashMap<&T, usize>
-        where
-            T: Eq + Hash,
-        {
-            let mut cnt = HashMap::new();
-            for i in items {
-                *cnt.entry(i).or_insert(0) += 1
-            }
-            cnt
-        }
+    trait UnorderedEq {
+        fn unordered_eq(&self, other: &Self) -> bool;
+    }
 
-        count(a) == count(b)
+    impl<T: Eq + Clone> UnorderedEq for Vec<T> {
+        fn unordered_eq(&self, other: &Self) -> bool {
+            if self.len() != other.len() {
+                return false;
+            }
+
+            let mut match_count = 0;
+
+            let mut other_to_check: Self = Vec::new();
+            other_to_check.clone_from(other);
+
+            for item in self {
+                let index_in_other = other_to_check.iter().position(|e| e == item);
+
+                if let Some(index) = index_in_other {
+                    other_to_check.remove(index);
+                    match_count += 1;
+                }
+            }
+
+            println!("{}", match_count);
+            self.len() == match_count
+        }
     }
 
     #[test]
@@ -92,37 +107,34 @@ mod tests {
 
     #[test]
     fn test_word_at_pos() {
-        // use std::env;
-        // let parent_path = env::current_dir().unwrap();
-        // println!("The current directory is {}", parent_path.display());
         let path_prefix = "./src/langserver/".to_string();
         let datas = vec![
-            Position {
+            KCLPOS {
                 filename: (path_prefix.clone() + "test_data/inherit.k"),
                 line: 0,
                 column: Some(0),
             },
-            Position {
+            KCLPOS {
                 filename: (path_prefix.clone() + "test_data/inherit.k"),
                 line: 1,
                 column: Some(5),
             },
-            Position {
+            KCLPOS {
                 filename: (path_prefix.clone() + "test_data/inherit.k"),
                 line: 3,
                 column: Some(7),
             },
-            Position {
+            KCLPOS {
                 filename: (path_prefix.clone() + "test_data/inherit.k"),
                 line: 3,
                 column: Some(10),
             },
-            Position {
+            KCLPOS {
                 filename: (path_prefix.clone() + "test_data/inherit.k"),
                 line: 4,
                 column: Some(8),
             },
-            Position {
+            KCLPOS {
                 filename: (path_prefix + "test_data/inherit.k"),
                 line: 4,
                 column: Some(100),
@@ -143,71 +155,174 @@ mod tests {
 
     #[test]
     fn test_match_word() {
-        let path = "./src/langserver/test_data/test_word_workspace".to_string();
+        let parent_path: String = env::current_dir().unwrap().to_str().unwrap().into();
+        // println!("The current directory is {}", parent_path.display());
+        let path = parent_path + "/src/langserver/test_data/test_word_workspace";
         let datas = vec![String::from("Son")];
         let except = vec![vec![
-            Position {
-                filename: String::from(
-                    "./src/langserver/test_data/test_word_workspace/inherit_pkg.k",
-                ),
-                line: 2,
-                column: Some(7),
+            Location {
+                uri: Url::from_file_path(path.clone() + "/inherit_pkg.k").unwrap(),
+                range: Range {
+                    start: Position {
+                        line: 2,
+                        character: 7,
+                    },
+                    end: Position {
+                        line: 2,
+                        character: 10,
+                    },
+                },
             },
-            Position {
-                filename: String::from("./src/langserver/test_data/test_word_workspace/inherit.k"),
-                line: 3,
-                column: Some(7),
+            Location {
+                uri: Url::from_file_path(path.clone() + "/inherit.k").unwrap(),
+                range: Range {
+                    start: Position {
+                        line: 3,
+                        character: 7,
+                    },
+                    end: Position {
+                        line: 3,
+                        character: 10,
+                    },
+                },
             },
-            Position {
-                filename: String::from("./src/langserver/test_data/test_word_workspace/inherit.k"),
-                line: 7,
-                column: Some(16),
+            Location {
+                uri: Url::from_file_path(path.clone() + "/inherit.k").unwrap(),
+                range: Range {
+                    start: Position {
+                        line: 7,
+                        character: 16,
+                    },
+                    end: Position {
+                        line: 7,
+                        character: 19,
+                    },
+                },
             },
         ]];
         for i in 0..datas.len() {
-            assert!(test_eq_list(
-                &langserver::match_word(path.clone(), datas[i].clone()),
-                &except[i]
-            ));
+            assert!(langserver::match_word(path.clone(), datas[i].clone()).unordered_eq(&except[i]));
         }
     }
 
     #[test]
     fn test_word_map() {
-        let path = "./src/langserver/test_data/test_word_workspace_map".to_string();
-        let mut mp = langserver::word_map::WorkSpaceWordMap::new(path);
+        let parent_path: String = env::current_dir().unwrap().to_str().unwrap().into();
+        let path = parent_path + "/src/langserver/test_data/test_word_workspace_map";
+        let mut mp = langserver::word_map::WorkSpaceWordMap::new(path.clone());
         mp.build();
         let _res = fs::rename(
-            "./src/langserver/test_data/test_word_workspace_map/inherit_pkg.k",
-            "./src/langserver/test_data/test_word_workspace_map/inherit_bak.k",
+            path.clone() + "/inherit_pkg.k",
+            path.clone() + "/inherit_bak.k",
         );
         mp.rename_file(
-            "./src/langserver/test_data/test_word_workspace_map/inherit_pkg.k".to_string(),
-            "./src/langserver/test_data/test_word_workspace_map/inherit_bak.k".to_string(),
+            path.clone() + "/inherit_pkg.k",
+            path.clone() + "/inherit_bak.k",
         );
-        mp.delete_file("./src/langserver/test_data/test_word_workspace_map/inherit.k".to_string());
+        mp.delete_file(path.clone() + "/inherit.k");
         let _res = fs::rename(
-            "./src/langserver/test_data/test_word_workspace_map/inherit_bak.k",
-            "./src/langserver/test_data/test_word_workspace_map/inherit_pkg.k",
+            path.clone() + "/inherit_bak.k",
+            path.clone() + "/inherit_pkg.k",
         );
 
-        let except = vec![Position {
-            filename: String::from(
-                "./src/langserver/test_data/test_word_workspace_map/inherit_bak.k",
-            ),
-            line: 2,
-            column: Some(7),
+        let except = vec![Location {
+            uri: Url::from_file_path(path.clone() + "/inherit_bak.k").unwrap(),
+            range: Range {
+                start: Position {
+                    line: 2,
+                    character: 7,
+                },
+                end: Position {
+                    line: 2,
+                    character: 10,
+                },
+            },
         }];
         assert_eq!(mp.get(&String::from("Son")), Some(except));
     }
 
+    // #[test]
+    // fn test_word_map_aa() {
+    //     let path = "/Users/zz/code/KCL-Models/fib.k";
+    //     go_to_def_test(
+    //         path,
+    //         KCLPOS {
+    //             filename: String::from("/Users/zz/code/KCL-Models/fib.k"),
+    //             line: 14,
+    //             column: Some(9),
+    //         },
+    //     );
+    // }
+
     #[test]
-    fn test_word_map_aa() {
-        let path = "/Users/zz/code/KCL-Models/fib.k";
-        go_to_def_test(path,             Position {
-            filename: String::from("/Users/zz/code/KCL-Models/fib.k"),
-            line: 14,
-            column: Some(9),
-        });
+    fn test_go_to_def() {
+        let parent_path: String = env::current_dir().unwrap().to_str().unwrap().into();
+        let path_prefix = parent_path + "/src/langserver/";
+        let datas = vec![KCLPOS {
+            filename: (path_prefix.clone() + "test_data/simple.k"),
+            line: 1,
+            column: Some(4),
+        }];
+        let expect = vec![Some(Location {
+            uri: Url::from_file_path(path_prefix.clone() + "test_data/simple.k").unwrap(),
+            range: Range {
+                start: Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: Position {
+                    line: 0,
+                    character: 1,
+                },
+            },
+        })];
+        for i in 0..datas.len() {
+            assert_eq!(
+                go_to_def(datas[i].filename.clone(), datas[i].clone()),
+                expect[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_find_refs() {
+        let parent_path: String = env::current_dir().unwrap().to_str().unwrap().into();
+        let path_prefix = parent_path + "/src/langserver/";
+        let datas = vec![KCLPOS {
+            filename: (path_prefix.clone() + "test_data/simple.k"),
+            line: 0,
+            column: Some(0),
+        }];
+        let expect = vec![vec![
+            Location {
+                uri: Url::from_file_path(path_prefix.clone() + "test_data/simple.k").unwrap(),
+                range: Range {
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 0,
+                        character: 1,
+                    },
+                },
+            },
+            Location {
+                uri: Url::from_file_path(path_prefix.clone() + "test_data/simple.k").unwrap(),
+                range: Range {
+                    start: Position {
+                        line: 1,
+                        character: 4,
+                    },
+                    end: Position {
+                        line: 1,
+                        character: 5,
+                    },
+                },
+            },
+        ]];
+        for i in 0..datas.len() {
+            assert!(find_refs(datas[i].filename.clone(), datas[i].clone()).unordered_eq(&expect[i]));
+        }
     }
 }

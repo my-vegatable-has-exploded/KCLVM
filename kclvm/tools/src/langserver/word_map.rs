@@ -1,13 +1,13 @@
 use crate::langserver;
 use crate::util;
-use kclvm_error::Position;
 use std::collections::HashMap;
+use tower_lsp::lsp_types::{Location, Position, Range, Url};
 
 // Record all occurrences of the name in a file
 #[derive(Default)]
 pub struct FileWordMap {
     file_name: String,
-    word_map: HashMap<String, Vec<Position>>,
+    word_map: HashMap<String, Vec<Location>>,
 }
 
 impl FileWordMap {
@@ -24,8 +24,8 @@ impl FileWordMap {
     }
 
     // insert an occurrence of a name
-    pub fn insert(&mut self, name: String, pos: Position) {
-        self.word_map.entry(name).or_insert(Vec::new()).push(pos);
+    pub fn insert(&mut self, name: String, loc: Location) {
+        self.word_map.entry(name).or_insert(Vec::new()).push(loc);
     }
 
     // build the record map
@@ -40,17 +40,25 @@ impl FileWordMap {
                 self.word_map
                     .entry(x.word.clone())
                     .or_insert(Vec::new())
-                    .push(Position {
-                        filename: self.file_name.clone(),
-                        line: li as u64,
-                        column: Some(x.startpos as u64),
+                    .push(Location {
+                        uri: Url::from_file_path(self.file_name.clone()).unwrap(),
+                        range: Range {
+                            start: Position {
+                                line: li as u32,
+                                character: x.startpos as u32,
+                            },
+                            end: Position {
+                                line: li as u32,
+                                character: x.endpos as u32, // TODO: check if it is correct, may need to -1
+                            },
+                        },
                     })
-            });
+            })
         }
     }
 
     // return all occurrence of a name
-    pub fn get(&self, name: &String) -> Option<&Vec<Position>> {
+    pub fn get(&self, name: &String) -> Option<&Vec<Location>> {
         self.word_map.get(name)
     }
 }
@@ -114,7 +122,7 @@ impl WorkSpaceWordMap {
     }
 
     // return all occurrence of a name in the workspace
-    pub fn get(self, name: &String) -> Option<Vec<Position>> {
+    pub fn get(self, name: &String) -> Option<Vec<Location>> {
         let mut words = Vec::new();
         for (_, mp) in self.file_map.iter() {
             match mp.get(name) {
