@@ -38,7 +38,7 @@ fn stack_link_lld() {
         .unwrap();
     let libdir = String::from_utf8(libdir.stdout).unwrap();
 
-    println!("cargo:libdir={}", libdir);
+    println!("cargo:rustc-link-search={}", libdir);
     for lib in &[
         "lldMachO",
         "lldELF",
